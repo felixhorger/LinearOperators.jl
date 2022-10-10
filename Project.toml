@@ -1,0 +1,7 @@
+name = "LinearOperators"
+uuid = "76dac3f4-b4cd-4dbb-a597-6f4eb71d8b9f"
+authors = ["Felix Horger <felix.horger@kcl.ac.uk>"]
+version = "0.1.0"
+
+[deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
