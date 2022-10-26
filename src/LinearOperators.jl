@@ -21,6 +21,9 @@ module LinearOperators
 	# Basic types of linear operators
 	abstract type AbstractLinearOperator end
 
+	# Make it callable
+	(A::AbstractLinearOperator)(x) = A * x
+
 	# n × m
 	struct LinearOperator <: AbstractLinearOperator
 		shape::NTuple{2, Integer}
