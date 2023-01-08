@@ -1,4 +1,22 @@
 
+"""
+
+This module lives off side effects.
+It offers the possiblity for good performance though.
+
+1) Side-effect free operator by omitting argument `y`, not recommended
+```julia
+A = LinearOperator{Float64}((10, 10), (y, x) -> I(10) * x)
+```
+
+2) Non-side-effect free operator, by providing an output vector, recommended
+```julia
+A = LinearOperator{Float64}((10, 10), (y, x) -> mul!(y, I(10), x); out=Vector{Float64}(undef, 10))
+```
+
+Keep in mind: if you want to reuse the result of an operator-vector product, copy it!
+
+"""
 module LinearOperators
 
 	import Base.:*
@@ -17,41 +35,55 @@ module LinearOperators
 	export HermitianOperator, UnitaryOperator, UniformScalingOperator
 
 	# Function used as a placeholder
-	dummy(x) = error("Not implemented by user") 
+	dummy(x, y) = error("Not implemented by user")
 
 	# Basic types of linear operators
 	abstract type AbstractLinearOperator{T <: Number} end
 
 	# Make it callable
-	(A::AbstractLinearOperator{T})(x::AbstractVector{T}) where T <: Number = A * x
+	(A::AbstractLinearOperator{T})(x::AbstractVector{<: Number}) where T <: Number = A * x
+	(A::AbstractLinearOperator{T})(y::AbstractVector{T}, x::AbstractVector{<: Number}) where T <: Number = A.op(y, x)
+
+	# Function and pre-allocated output
+	MatrixFunction{T} = FunctionWrapper{Vector{T}, NTuple{2, Vector{T}}}
 
 	# n × m
-	MatrixFunction{T} = FunctionWrapper{Vector{T}, Tuple{Vector{T}}}
 	struct LinearOperator{T <: Number} <: AbstractLinearOperator{T}
 		shape::NTuple{2, Integer}
 		op::MatrixFunction{T}
 		adj::MatrixFunction{T}
 		inv::MatrixFunction{T}
 		invadj::MatrixFunction{T}
-		function LinearOperator{T}(shape::NTuple{2, Integer}, op, adj=dummy, inv=dummy, invadj=dummy) where T
-			new{T}(shape, op, adj, inv, invadj)
+		out::Vector{T}
+		out_adj_inv::Vector{T}
+		function LinearOperator{T}(
+			shape, op;
+			adj=dummy, inv=dummy, invadj=dummy,
+			out=Vector{T}(undef, 0),
+			out_adj_inv=Vector{T}(undef, 0)
+		) where T
+			new{T}(shape, op, adj, inv, invadj, out, out_adj_inv)
 		end
 	end
 	struct HermitianOperator{T <: Number} <: AbstractLinearOperator{T}
-		dim::Integer
+		dim::Int
 		op::MatrixFunction{T}
 		inv::MatrixFunction{T}
-		HermitianOperator{T}(dim, op, inv=dummy) where T = new{T}(dim, op, inv)
+		out::Vector{T}
+		HermitianOperator{T}(dim, op; inv=dummy, out=Vector{T}(undef, 0)) where T = new{T}(dim, op, inv, out)
 	end
 	struct UnitaryOperator{T <: Number} <: AbstractLinearOperator{T}
 		dim::Integer
 		op::MatrixFunction{T}
 		adj::MatrixFunction{T}
-		UnitaryOperator{T}(dim, op, adj=dummy) where T = new{T}(dim, op, adj)
+		out::Vector{T}
+		UnitaryOperator{T}(dim, op; adj=dummy, out=Vector{T}(undef, 0)) where T = new{T}(dim, op, adj, out)
 	end
 	struct UniformScalingOperator{T <: Number} <: AbstractLinearOperator{T}
 		dim::Integer
 		scalar::T
+		out::Vector{T}
+		UniformScalingOperator{T}(dim, scalar::T; out=Vector{T}(undef, 0)) where T = new{T}(dim, scalar, out)
 	end
 
 	# Composing linear operators
@@ -141,18 +173,33 @@ module LinearOperators
 
 	# Operations on linear operators
 	# Adjoint
-	adjoint(A::LinearOperator{T}) where T	= LinearOperator{T}(reverse(A.shape), A.adj, A.op, A.invadj, A.inv)
+	adjoint(A::LinearOperator{T}) where T = LinearOperator{T}(
+		reverse(A.shape),
+		A.adj;
+		adj		= A.op,
+		inv		= A.invadj,
+		invadj	= A.inv,
+		out		= A.out_adj_inv,
+		out_adj_inv = A.out
+	)
 	adjoint(A::HermitianOperator)			= A
-	adjoint(A::UnitaryOperator{T}) where T	= UnitaryOperator{T}(A.dim, A.adj, A.op)
+	adjoint(A::UnitaryOperator{T}) where T	= UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
 	adjoint(A::UniformScalingOperator)		= A
 	# Inverse
 	function inv(A::LinearOperator{T}) where T
 		@assert issquare(A)
-		return LinearOperator{T}(A.shape, A.inv, A.invadj, A.op, A.adj)
+		return LinearOperator{T}(
+			A.shape, A.inv;
+			adj=A.invadj,
+			inv=A.op,
+			invadj=A.adj,
+			out=A.out_adj_inv,
+			out_inv_adj=A.out
+		)
 	end
-	inv(A::HermitianOperator{T})		where T = HermitianOperator{T}(A.dim, A.inv, A.op)
-	inv(A::UnitaryOperator{T})			where T = UnitaryOperator{T}(A.dim, A.adj, A.op)
-	inv(A::UniformScalingOperator{T})	where T = UniformScalingOperator{T}(A.dim, 1 ./ A.scalar)
+	inv(A::HermitianOperator{T})		where T = HermitianOperator{T}(A.dim, A.inv; inv=A.op, out=A.out)
+	inv(A::UnitaryOperator{T})			where T = UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
+	inv(A::UniformScalingOperator{T})	where T = UniformScalingOperator{T}(A.dim, 1 ./ A.scalar; out=A.out)
 	# Both for composite type
 	# Note: inv will only work if all operators are square
 	for op in (:adjoint, :inv)
@@ -179,7 +226,7 @@ module LinearOperators
 	end
 	function *(A::AbstractLinearOperator{T}, x::AbstractVector{T}) where T <: Number
 		checkdims(Val(:*), A, x)
-		return A.op(x)
+		return A.op(A.out, x)
 	end
 	function *(A::CompositeLinearOperator{T, N, :*}, x::AbstractVector{T}) where {T <: Number, N}
 		checkdims(Val(:*), A, x)
@@ -191,19 +238,13 @@ module LinearOperators
 	end
 	function *(A::CompositeLinearOperator{T, N, :+}, x::AbstractVector{T}) where {T <: Number, N}
 		checkdims(Val(:*), A, x)
-		y = zeros(eltype(x), size(x))
-		for B in A.ops
+		y = A.ops[1] * x
+		for B in A.ops[2:end]
 			y .+= B * x
 		end
 		return y
 	end
-	function mul!(y::AbstractVector{T}, A::AbstractLinearOperator{T}, x::AbstractVector{T}) where T <: Number
-		z = A * x
-		if y !== z # If they are not the same reference
-			y .= z
-		end
-		return y
-	end
+	mul!(y::AbstractVector{T}, A::AbstractLinearOperator{T}, x::AbstractVector{T}) where T <: Number = A.op(y, x)
 
 	# If input types are wrong
 	*(A::AbstractLinearOperator{T}, x::AbstractVector{<: Number}) where T = A * convert.(T, x)
