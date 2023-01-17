@@ -217,45 +217,85 @@ module LinearOperators
 		# Note: output type depends on runtime argument
 	end
 
-	# Matrix vector multiplication
-	function checkdims(op::Val{:*}, A::AbstractLinearOperator, x::AbstractVector)
-		nA = size(A, 2)
-		nx = length(x)
-		nA != nx && throw(DimensionMismatch("second dimension of A, $nA, does not match length of x, $nx"))
-		return
-	end
-	function *(A::AbstractLinearOperator{T}, x::AbstractVector{T}) where T <: Number
-		checkdims(Val(:*), A, x)
-		return A.op(A.out, x)
-	end
-	function *(A::CompositeLinearOperator{T, N, :*}, x::AbstractVector{T}) where {T <: Number, N}
-		checkdims(Val(:*), A, x)
-		y = x
-		for B in reverse(A.ops)
-			y = B * y # y stays a Vector here, i.e. type-stable
-		end
-		return y
-	end
-	function *(A::CompositeLinearOperator{T, N, :+}, x::AbstractVector{T}) where {T <: Number, N}
-		checkdims(Val(:*), A, x)
-		y = A.ops[1] * x
-		for B in A.ops[2:end]
-			y .+= B * x
-		end
-		return y
-	end
-	mul!(y::AbstractVector{T}, A::AbstractLinearOperator{T}, x::AbstractVector{T}) where T <: Number = A.op(y, x)
-
-	# If input types are wrong
-	*(A::AbstractLinearOperator{T}, x::AbstractVector{<: Number}) where T = A * convert.(T, x)
-	mul!(y::AbstractVector{T}, A::AbstractLinearOperator{T}, x::AbstractVector{<: Number}) where T = mul!(y, A, convert.(T, x))
-
 	# Matrix scalar multiplication
 	*(A::AbstractLinearOperator{T}, a::T) where T = CompositeLinearOperator{T, 2, :*}((A, UniformScalingOperator{T}(size(A, 2), a)))
 	*(a::T, A::AbstractLinearOperator{T}) where T = CompositeLinearOperator{T, 2, :*}((UniformScalingOperator{T}(size(A, 1), a), A))
 	*(a::Number, A::AbstractLinearOperator{T}) where T = convert(T, a) * A
 	*(A::AbstractLinearOperator{T}, a::Number) where T = A * convert(T, a)
 	# Note: Despite the equivalence A * a == a * A, if A is non-square it can have a performance impact
+
+	# Matrix vector multiplication
+	function checkdims(A::AbstractLinearOperator, x::AbstractVector, dim::Integer)
+		@assert dim ∈ (1, 2)
+		nA = size(A, dim)
+		nx = length(x)
+		if dim == 1
+			axis = "first"
+			name = "output"
+		else
+			axis = "second"
+			name = "input"
+		end
+		nA != nx && throw(DimensionMismatch(
+			"$axis dimension of A, $nA, does not match length of $name x, $nx"
+		))
+		return
+	end
+
+	# Method for all but composite operators
+	function mul!(y::AbstractVector{T}, A::AbstractLinearOperator{T}, x::AbstractVector{T}) where T <: Number
+		checkdims(A, y, 1)
+		checkdims(A, x, 2)
+		return A.op(y, x)
+	end
+	function *(A::AbstractLinearOperator{T}, x::AbstractVector{T}) where T <: Number
+		checkdims(A, x, 2)
+		return A.op(A.out, x)
+	end
+
+	# For composite opreators
+	# In-place
+	function mul!(y::AbstractVector{T}, A::CompositeLinearOperator{T, N, :*}, x::AbstractVector{T}) where {T <: Number, N}
+		checkdims(A, y, 1)
+		checkdims(A, x, 2)
+		for B in reverse(A.ops)[1:end-1]
+			x = B * x # x stays a Vector here, i.e. type-stable, but changes length
+		end
+		mul!(y, A.ops[1], x)
+		return y
+	end
+	function mul!(y::AbstractVector{T}, A::CompositeLinearOperator{T, N, :+}, x::AbstractVector{T}) where {T <: Number, N}
+		checkdims(A, y, 1)
+		checkdims(A, x, 2)
+		mul!(y, A.ops[1], x)
+		for B in A.ops[2:end]
+			y .+= B * x
+		end
+		return y
+	end
+	# Into pre-allocated memory
+	function *(A::CompositeLinearOperator{T, N, :*}, x::AbstractVector{T}) where {T <: Number, N}
+		#checkdims(A, x, 2)
+		#for B in reverse(A.ops)
+		#	x = B * x # x stays a Vector here, i.e. type-stable
+		#end
+		#return x
+		mul!(A.ops[1].out, A, x)
+	end
+	function *(A::CompositeLinearOperator{T, N, :+}, x::AbstractVector{T}) where {T <: Number, N}
+		#checkdims(A, x, 2)
+		#y = A.ops[1] * x
+		#for B in A.ops[2:end]
+		#	y .+= B * x
+		#end
+		#return y
+		mul!(A.ops[1].out, A, x)
+	end
+
+	# If input types are wrong
+	*(A::AbstractLinearOperator{T}, x::AbstractVector{<: Number}) where T = A * convert.(T, x)
+	mul!(y::AbstractVector{T}, A::AbstractLinearOperator{T}, x::AbstractVector{<: Number}) where T = mul!(y, A, convert.(T, x))
+
 
 	# Distinguishing types
 	for f in (:all_hermitian_type, :all_unitary_type)
