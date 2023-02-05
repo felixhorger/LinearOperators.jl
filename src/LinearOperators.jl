@@ -59,7 +59,7 @@ module LinearOperators
 		function LinearOperator{T}(
 			shape, op;
 			adj=dummy, inv=dummy, invadj=dummy,
-			out=Vector{T}(undef, 0),
+			out=Vector{T}(undef, 0), # TODO: how to use empty function defined in MRIRecon.jl?
 			out_adj_inv=Vector{T}(undef, 0)
 		) where T
 			new{T}(shape, op, adj, inv, invadj, out, out_adj_inv)
