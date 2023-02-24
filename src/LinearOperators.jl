@@ -4,17 +4,13 @@
 This module lives off side effects.
 It offers the possiblity for good performance though.
 
-1) Side-effect free operator by omitting argument `y`, not recommended
-```julia
-A = LinearOperator{Float64}((10, 10), (y, x) -> I(10) * x)
-```
-
-2) Non-side-effect free operator, by providing an output vector, recommended
-```julia
-A = LinearOperator{Float64}((10, 10), (y, x) -> mul!(y, I(10), x); out=Vector{Float64}(undef, 10))
-```
-
 Keep in mind: if you want to reuse the result of an operator-vector product, copy it!
+
+DIFFERENT TO STANDARD JULIA:
+`A * x` means x can be changed if A includes in-place operations.
+
+SAME BEHAVIOUR AS STANDARD JULIA
+mul!(y, A, x) means x won't be changed, but y will.
 
 """
 module LinearOperators
@@ -89,6 +85,11 @@ module LinearOperators
 	# Composing linear operators
 	struct CompositeLinearOperator{T, N, O} <: AbstractLinearOperator{T}
 		ops::NTuple{N, AbstractLinearOperator{T}}
+		CompositeLinearOperator{T, N, :*}(ops) where {T, N} = new{T, N, :*}(ops)
+		function CompositeLinearOperator{T, N, :+}(ops) where {T, N}
+			any(length(B.out) == 0 for B in A.ops) && error("In-place operators not supported in addition-composite operators")
+			return new{T, N, :+}(ops)
+		end
 	end
 
 	# Size
@@ -258,6 +259,8 @@ module LinearOperators
 	function mul!(y::AbstractVector{T}, A::CompositeLinearOperator{T, N, :*}, x::AbstractVector{T}) where {T <: Number, N}
 		checkdims(A, y, 1)
 		checkdims(A, x, 2)
+		# Make sure x is not changed, and output is written into y
+		(length(A.ops[1].out) == 0 || length(A.ops[end].out) == 0) && error("First or last operator is in-place")
 		for B in reverse(A.ops)[1:end-1]
 			x = B * x # x stays a Vector here, i.e. type-stable, but changes length
 		end
@@ -273,14 +276,19 @@ module LinearOperators
 		end
 		return y
 	end
-	# Into pre-allocated memory
+	# Define A * x for composite operators
 	function *(A::CompositeLinearOperator{T, N, :*}, x::AbstractVector{T}) where {T <: Number, N}
 		#checkdims(A, x, 2)
 		#for B in reverse(A.ops)
 		#	x = B * x # x stays a Vector here, i.e. type-stable
 		#end
 		#return x
-		mul!(A.ops[1].out, A, x)
+		#
+		# Dimensions checked in individual operations
+		for B in reverse(A.ops)[1:end-1]
+			x = B * x # x stays a Vector here, i.e. type-stable, but changes length
+		end
+		return A.ops[1] * x
 	end
 	function *(A::CompositeLinearOperator{T, N, :+}, x::AbstractVector{T}) where {T <: Number, N}
 		#checkdims(A, x, 2)
@@ -289,7 +297,11 @@ module LinearOperators
 		#	y .+= B * x
 		#end
 		#return y
-		mul!(A.ops[1].out, A, x)
+		y = A.ops[1] * x
+		for B in A.ops[2:end]
+			y .+= B * x
+		end
+		return y
 	end
 
 	# If input types are wrong
