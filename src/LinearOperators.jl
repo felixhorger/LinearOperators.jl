@@ -23,6 +23,7 @@ module LinearOperators
 	import Base.inv
 	import Base.size
 	import Base.show
+	import Base.eltype
 	import LinearAlgebra.mul!
 	import FunctionWrappers: FunctionWrapper
 
