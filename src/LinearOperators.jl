@@ -92,6 +92,8 @@ module LinearOperators
 		end
 	end
 
+	eltype(A::AbstractLinearOperator{T}) = T
+
 	# Size
 	issquare(A::AbstractLinearOperator) = true
 	issquare(A::LinearOperator) = (A.shape[1] == A.shape[2])
