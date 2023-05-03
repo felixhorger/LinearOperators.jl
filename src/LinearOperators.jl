@@ -92,7 +92,7 @@ module LinearOperators
 		end
 	end
 
-	eltype(A::AbstractLinearOperator{T}) = T
+	eltype(A::AbstractLinearOperator{T}) where T = T
 
 	# Size
 	issquare(A::AbstractLinearOperator) = true
