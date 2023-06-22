@@ -29,7 +29,7 @@ module LinearOperators
 
 	export AbstractLinearOperator
 	export LinearOperator, CompositeLinearOperator
-	export HermitianOperator, UnitaryOperator, UniformScalingOperator
+	export HermitianOperator, UnitaryOperator, DiagonalOperator, UniformScalingOperator
 
 	# Function used as a placeholder
 	dummy(x, y) = error("Not implemented by user")
@@ -75,6 +75,12 @@ module LinearOperators
 		adj::MatrixFunction{T}
 		out::Vector{T}
 		UnitaryOperator{T}(dim, op; adj=dummy, out=Vector{T}(undef, 0)) where T = new{T}(dim, op, adj, out)
+	end
+	struct DiagonalOperator{T <: Number} <: AbstractLinearOperator{T}
+		dim::Integer
+		diagonal::Vector{T}
+		out::Vector{T}
+		DiagonalOperator{T}(dim, diagonal::Vector{T}; out=Vector{T}(undef, 0)) where T = new{T}(dim, diagonal, out)
 	end
 	struct UniformScalingOperator{T <: Number} <: AbstractLinearOperator{T}
 		dim::Integer
@@ -186,9 +192,11 @@ module LinearOperators
 		out		= A.out_adj_inv,
 		out_adj_inv = A.out
 	)
-	adjoint(A::HermitianOperator)			= A
-	adjoint(A::UnitaryOperator{T}) where T	= UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
-	adjoint(A::UniformScalingOperator)		= A
+	adjoint(A::HermitianOperator)					= A
+	adjoint(A::UnitaryOperator{T})			where T	= UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
+	adjoint(A::UniformScalingOperator{T})	where T	= UniformScalingOperator{T}(A.dim, conj(A.scalar); out=A.out)
+	adjoint(A::DiagonalOperator{T})			where T	= DiagonalOperator{T}(A.dim, conj.(A.diag); out=A.out)
+
 	# Inverse
 	function inv(A::LinearOperator{T}) where T
 		@assert issquare(A)
@@ -203,7 +211,16 @@ module LinearOperators
 	end
 	inv(A::HermitianOperator{T})		where T = HermitianOperator{T}(A.dim, A.inv; inv=A.op, out=A.out)
 	inv(A::UnitaryOperator{T})			where T = UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
-	inv(A::UniformScalingOperator{T})	where T = UniformScalingOperator{T}(A.dim, 1 ./ A.scalar; out=A.out)
+
+	function inv(A::UniformScalingOperator{T}) where T
+		A.scalar == 0 && error("A is singular")
+		UniformScalingOperator{T}(A.dim, 1 / A.scalar; out=A.out)
+	end
+	function inv(A::DiagonalOperator{T}) where T
+		any(iszero, A.diagonal) && error("A is singular")
+		DiagonalOperator{T}(A.dim, 1 / A.diagonal; out=A.out)
+	end
+
 	# Both for composite type
 	# Note: inv will only work if all operators are square
 	for op in (:adjoint, :inv)
@@ -326,6 +343,7 @@ module LinearOperators
 			end
 		end
 	end
+	# TODO base cases missing
 
 	show(io::IO, A::AbstractLinearOperator) = print(io, "$(typeof(A))(...)")
 	show(io::IO, ::MIME"text/plain", A::AbstractLinearOperator) = show(io, A)
