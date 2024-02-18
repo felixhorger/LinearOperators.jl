@@ -12,6 +12,8 @@ DIFFERENT TO STANDARD JULIA:
 SAME BEHAVIOUR AS STANDARD JULIA
 mul!(y, A, x) means x won't be changed, but y will.
 
+TODO: need to implement a version were output is indeed a new vector, for safety purposes, sometimes it is hard to keep track, specifically new users
+
 """
 module LinearOperators
 
