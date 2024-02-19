@@ -27,11 +27,12 @@ module LinearOperators
 	import Base.show
 	import Base.eltype
 	import LinearAlgebra.mul!
+	import LinearAlgebra.ldiv!
 	import FunctionWrappers: FunctionWrapper
 
 	export AbstractLinearOperator
 	export LinearOperator, CompositeLinearOperator
-	export HermitianOperator, UnitaryOperator, DiagonalOperator, UniformScalingOperator
+	export HermitianOperator, UnitaryOperator, DiagonalOperator
 
 	# Function used as a placeholder
 	dummy(x, y) = error("Not implemented by user")
@@ -78,17 +79,23 @@ module LinearOperators
 		out::Vector{T}
 		UnitaryOperator{T}(dim, op; adj=dummy, out=Vector{T}(undef, 0)) where T = new{T}(dim, op, adj, out)
 	end
-	struct DiagonalOperator{T <: Number} <: AbstractLinearOperator{T}
+	struct DiagonalOperator{T <: Number, V <: Union{Number, AbstractVector{<: Number}}} <: AbstractLinearOperator{T}
 		dim::Integer
-		diagonal::Vector{T}
+		op::MatrixFunction{T}
+		diagonal::V
 		out::Vector{T}
-		DiagonalOperator{T}(dim, diagonal::Vector{T}; out=Vector{T}(undef, 0)) where T = new{T}(dim, diagonal, out)
-	end
-	struct UniformScalingOperator{T <: Number} <: AbstractLinearOperator{T}
-		dim::Integer
-		scalar::T
-		out::Vector{T}
-		UniformScalingOperator{T}(dim, scalar::T; out=Vector{T}(undef, 0)) where T = new{T}(dim, scalar, out)
+		function DiagonalOperator(dim, diagonal::Union{T, AbstractVector{<: T}}; out::AbstractVector{<:T}=Vector{T}(undef, 0)) where T
+			return DiagonalOperator{T}(dim, diagonal; out)
+		end
+		function DiagonalOperator{T}(dim, diagonal::V; out::AbstractVector{<:T}=Vector{T}(undef, 0)) where {T, V <: Union{Number, AbstractVector{<: Number}}}
+			@assert isa(diagonal, Number) || length(diagonal) == dim
+			return new{T, V}(
+				dim,
+				(y, x) -> (@. y = diagonal * x),
+				diagonal,
+				out
+			)
+		end
 	end
 
 	# Composing linear operators
@@ -113,11 +120,11 @@ module LinearOperators
 		return A.dim
 	end
 	size(A::AbstractLinearOperator)		= (A.dim, A.dim)
-	size(A::LinearOperator)				= A.shape
+	size(A::LinearOperator)			= A.shape
 	size(A::LinearOperator, d::Integer)	= A.shape[d]
-	size(A::CompositeLinearOperator{T, N, :*})				where {T, N} = (size(A.ops[1], 1), size(A.ops[N], 2))
+	size(A::CompositeLinearOperator{T, N, :*})		where {T, N} = (size(A.ops[1], 1), size(A.ops[N], 2))
 	size(A::CompositeLinearOperator{T, N, :*}, d::Integer)	where {T, N} = size(A)[d]
-	size(A::CompositeLinearOperator{T, N, :+})				where {T, N} = size(A.ops[1])
+	size(A::CompositeLinearOperator{T, N, :+})		where {T, N} = size(A.ops[1])
 	size(A::CompositeLinearOperator{T, N, :+}, d::Integer)	where {T, N} = size(A.ops[1])[d]
 
 	# Multiplication and summation
@@ -190,14 +197,16 @@ module LinearOperators
 		A.adj;
 		adj		= A.op,
 		inv		= A.invadj,
-		invadj	= A.inv,
+		invadj		= A.inv,
 		out		= A.out_adj_inv,
-		out_adj_inv = A.out
+		out_adj_inv	= A.out
 	)
-	adjoint(A::HermitianOperator)					= A
-	adjoint(A::UnitaryOperator{T})			where T	= UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
-	adjoint(A::UniformScalingOperator{T})	where T	= UniformScalingOperator{T}(A.dim, conj(A.scalar); out=A.out)
-	adjoint(A::DiagonalOperator{T})			where T	= DiagonalOperator{T}(A.dim, conj.(A.diag); out=A.out)
+	adjoint(A::HermitianOperator)				= A
+	adjoint(A::UnitaryOperator{T})		where T		= UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
+	# Note: might ask why use A.out as out of new operator, this would be problem if someone does A'*A
+	# why would anyone do A'*A if A' = A^-1? Need to catch this case somehow? should happen in mul!()
+	adjoint(A::DiagonalOperator{T, V})	where {T, V}	= DiagonalOperator{T, V}(A.dim, conj.(A.diagonal); out=A.out)
+	# Note: here it's ok to use same out, because always in place
 
 	# Inverse
 	function inv(A::LinearOperator{T}) where T
@@ -211,16 +220,11 @@ module LinearOperators
 			out_inv_adj=A.out
 		)
 	end
-	inv(A::HermitianOperator{T})		where T = HermitianOperator{T}(A.dim, A.inv; inv=A.op, out=A.out)
-	inv(A::UnitaryOperator{T})			where T = UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
-
-	function inv(A::UniformScalingOperator{T}) where T
-		A.scalar == 0 && error("A is singular")
-		UniformScalingOperator{T}(A.dim, 1 / A.scalar; out=A.out)
-	end
-	function inv(A::DiagonalOperator{T}) where T
+	inv(A::HermitianOperator{T})	where T = HermitianOperator{T}(A.dim, A.inv; inv=A.op, out=A.out)
+	inv(A::UnitaryOperator{T})	where T = UnitaryOperator{T}(A.dim, A.adj; adj=A.op, out=A.out)
+	function inv(A::DiagonalOperator{T, V}) where {T, V}
 		any(iszero, A.diagonal) && error("A is singular")
-		DiagonalOperator{T}(A.dim, 1 / A.diagonal; out=A.out)
+		DiagonalOperator{T}(A.dim, 1 ./ A.diagonal; out=A.out)
 	end
 
 	# Both for composite type
@@ -232,6 +236,10 @@ module LinearOperators
 		end
 	end
 
+	function ldiv!(y::AbstractVector{<: T}, A::AbstractLinearOperator{T}, x::AbstractVector{<: T}) where T <: Number
+		mul!(y, inv(A), x)
+	end
+
 	# Potentiation
 	function ^(A::AbstractLinearOperator{T}, p::Integer) where T
 		@assert p > 0
@@ -241,11 +249,22 @@ module LinearOperators
 	end
 
 	# Matrix scalar multiplication
-	*(A::AbstractLinearOperator{T}, a::T) where T = CompositeLinearOperator{T, 2, :*}((A, UniformScalingOperator{T}(size(A, 2), a)))
-	*(a::T, A::AbstractLinearOperator{T}) where T = CompositeLinearOperator{T, 2, :*}((UniformScalingOperator{T}(size(A, 1), a), A))
+	# Note: Despite the equivalence A * a == a * A, if A is non-square it can have a performance impact
 	*(a::Number, A::AbstractLinearOperator{T}) where T = convert(T, a) * A
 	*(A::AbstractLinearOperator{T}, a::Number) where T = A * convert(T, a)
-	# Note: Despite the equivalence A * a == a * A, if A is non-square it can have a performance impact
+	*(A::AbstractLinearOperator{T}, a::T) where T = CompositeLinearOperator{T, 2, :*}((A, DiagonalOperator{T, T}(size(A, 2), a)))
+	*(a::T, A::AbstractLinearOperator{T}) where T = CompositeLinearOperator{T, 2, :*}((DiagonalOperator{T, T}(size(A, 1), a), A))
+	*(a::Number, A::DiagonalOperator{T, V}) where {T, V} = A * a
+	function *(A::DiagonalOperator{T, V}, a::T) where {T, V}
+		diagonal = A.diagonal .* a
+		return DiagonalOperator{T}(A.dim, diagonal; out=A.out)
+	end
+	function *(A::DiagonalOperator{T, V}, a::Number) where {T, V}
+		PT = promote_type(eltype(A.diagonal), typeof(a))
+		diagonal = PT.(A.diagonal)
+		diagonal .*= a
+		return DiagonalOperator(A.dim, diagonal; out=similar(A.out, PT))
+	end
 
 	# Matrix vector multiplication
 	function checkdims(A::AbstractLinearOperator, x::AbstractVector, dim::Integer)
@@ -265,7 +284,7 @@ module LinearOperators
 		return
 	end
 
-	# Method for all but composite operators
+	# Method for all but composite and diagonal operators
 	function mul!(y::AbstractVector{T}, A::AbstractLinearOperator{T}, x::AbstractVector{T}) where T <: Number
 		checkdims(A, y, 1)
 		checkdims(A, x, 2)
@@ -300,12 +319,6 @@ module LinearOperators
 	end
 	# Define A * x for composite operators
 	function *(A::CompositeLinearOperator{T, N, :*}, x::AbstractVector{T}) where {T <: Number, N}
-		#checkdims(A, x, 2)
-		#for B in reverse(A.ops)
-		#	x = B * x # x stays a Vector here, i.e. type-stable
-		#end
-		#return x
-		#
 		# Dimensions checked in individual operations
 		for B in reverse(A.ops)[1:end-1]
 			x = B * x # x stays a Vector here, i.e. type-stable, but changes length
@@ -313,12 +326,7 @@ module LinearOperators
 		return A.ops[1] * x
 	end
 	function *(A::CompositeLinearOperator{T, N, :+}, x::AbstractVector{T}) where {T <: Number, N}
-		#checkdims(A, x, 2)
-		#y = A.ops[1] * x
-		#for B in A.ops[2:end]
-		#	y .+= B * x
-		#end
-		#return y
+		# Dimensions checked in individual operations
 		y = A.ops[1] * x
 		for B in A.ops[2:end]
 			y .+= B * x
