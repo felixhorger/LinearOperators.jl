@@ -14,6 +14,8 @@ mul!(y, A, x) means x won't be changed, but y will.
 
 TODO: need to implement a version were output is indeed a new vector, for safety purposes, sometimes it is hard to keep track, specifically new users
 
+TODO: it's nasty that if out is not allocated, applying the operator gives "broadcast error", need to catch that somehow. E.g. Diagonal operator
+
 """
 module LinearOperators
 
@@ -97,6 +99,7 @@ module LinearOperators
 			)
 		end
 	end
+	# TODO: in-place operator for this? Maybe if length(out) == 0?
 
 	# Composing linear operators
 	struct CompositeLinearOperator{T, N, O} <: AbstractLinearOperator{T}
